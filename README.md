@@ -1,1 +1,1 @@
-# yaml file
+# k8s yaml file
