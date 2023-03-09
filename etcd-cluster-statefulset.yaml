@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: Service    
+metadata:
+  name: etcd-cluster #无头服务
+  namespace: xm-etcd
+  labels:
+    app: etcd
+spec:
+  ports:
+  - port: 2380
+    name: etcd-server
+  - port: 2379
+    name: etcd-client
+  clusterIP: None
+  selector:
+    app: etcd
+  publishNotReadyAddresses: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-svc
+  namespace: xm-etcd
+  labels:
+    app: etcd
+spec:
+  type: NodePort
+  ports:
+    - name: etcd-cluster
+      port: 2379
+      targetPort: 2379
+
+  selector:
+    app: etcd
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-config
+  namespace: xm-etcd
+data:
+  run.sh: |
+    /usr/local/bin/etcd \
+        --data-dir=/var/etcd \
+        --name=${POD_NAME} \
+        --listen-peer-urls=http://0.0.0.0:2380 \
+        --listen-client-urls=http://0.0.0.0:2379 \
+        --advertise-client-urls=http://${POD_NAME}.${SERVICE_NAME}.${NAMESPACE}:2379 \
+        --initial-advertise-peer-urls=http://${POD_NAME}.${SERVICE_NAME}.${NAMESPACE}:2380 \
+        --initial-cluster-state='new' \
+        --initial-cluster-token='etcd-cluster-token' \
+        --initial-cluster=etcd-0=http://etcd-0.${SERVICE_NAME}.${NAMESPACE}:2380,etcd-1=http://etcd-1.${SERVICE_NAME}.${NAMESPACE}:2380,etcd-2=http://etcd-2.${SERVICE_NAME}.${NAMESPACE}:2380
+       # --initial-cluster=pod名称=http://pod名称.无头服务名称:命名空间:2380  节点数和副本书对应
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: etcd
+  name: etcd
+  namespace: xm-etcd
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: etcd
+  serviceName: etcd-cluster #service 名称
+  template:
+    metadata:
+      labels:
+        app: etcd
+      name: etcd
+    spec:
+      containers:
+      - env:
+        - name: POD_NAME  #当前pod名
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+         
+        - name: NAMESPACE  #当前命名空间名称
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+       
+        - name: SERVICE_NAME #无头服务svc名称
+          value: "etcd-cluster"
+
+        name: etcd
+        image: quay.io/coreos/etcd:v3.3.13
+        command: ['sh','-c','/run.sh']
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 2380
+          name: peer
+          protocol: TCP
+        - containerPort: 2379
+          name: client
+          protocol: TCP
+#        resources:
+#          requests:
+#            memory: "2Gi"
+#            cpu: "1000m"
+#          limits:
+#            memory: "4Gi"
+#            cpu: "2000m"
+
+        volumeMounts:
+        - name: config
+          mountPath: /run.sh
+          subPath: run.sh          
+
+        - name: data-etcd
+          mountPath: /var/etcd
+
+      volumes:
+      - name: config
+        configMap:
+          name: etcd-config
+          defaultMode: 0777
+
+  volumeClaimTemplates:
+  - metadata:
+      name: data-etcd
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "nfs-client"
+      resources:
+        requests:
+          storage: 2Gi
+
